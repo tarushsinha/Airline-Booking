@@ -5,6 +5,36 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_FILE="${STATE_FILE:-$ROOT_DIR/test scripts/testing_state.json}"
 RESET_STATE="${RESET_STATE:-1}"
 
+if command -v rg >/dev/null 2>&1; then
+  MATCHER="rg"
+else
+  MATCHER="grep"
+fi
+
+contains_stdin() {
+  local pattern="$1"
+  if [[ "$MATCHER" == "rg" ]]; then
+    rg -q "$pattern"
+  else
+    grep -q "$pattern"
+  fi
+}
+
+contains_file() {
+  local pattern="$1"
+  local file="$2"
+  if [[ "$MATCHER" == "rg" ]]; then
+    rg -q "$pattern" "$file"
+  else
+    grep -q "$pattern" "$file"
+  fi
+}
+
+extract_field() {
+  local key="$1"
+  sed -n "s/^${key}=//p" | head -n 1
+}
+
 if [[ "$RESET_STATE" == "1" ]]; then
   rm -f "$STATE_FILE" "$STATE_FILE.tmp"
 fi
@@ -14,11 +44,11 @@ echo "[smoke] reset state before run: $RESET_STATE"
 
 echo "[smoke] 1/12 search by departure date (seeded flight)"
 python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" search --departure-date 2025-03-01
-python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" search --departure-date 2025-03-01 | rg -q "F-SFO-PDX-20250301-0845"
+python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" search --departure-date 2025-03-01 | contains_stdin "F-SFO-PDX-20250301-0845"
 
 echo "[smoke] 2/12 search by departure time substring (seeded flight)"
 python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" search --departure-time "20250301 08:"
-python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" search --departure-time "20250301 08:" | rg -q "F-SFO-PDX-20250301-0845"
+python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" search --departure-time "20250301 08:" | contains_stdin "F-SFO-PDX-20250301-0845"
 
 echo "[smoke] 3/12 hold seat on seeded flight"
 HOLD_OUTPUT="$(
@@ -27,23 +57,23 @@ HOLD_OUTPUT="$(
     --seats 12C
 )"
 echo "$HOLD_OUTPUT"
-HOLD_ID="$(echo "$HOLD_OUTPUT" | rg '^hold_id=' | sed 's/^hold_id=//')"
+HOLD_ID="$(echo "$HOLD_OUTPUT" | extract_field "hold_id")"
 [[ -n "$HOLD_ID" ]]
 
 echo "[smoke] 4/12 purchase held seat (persistence check across commands)"
 PURCHASE_OUTPUT="$(python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" purchase "$HOLD_ID")"
 echo "$PURCHASE_OUTPUT"
-PURCHASE_ID="$(echo "$PURCHASE_OUTPUT" | rg '^purchase_id=' | sed 's/^purchase_id=//')"
+PURCHASE_ID="$(echo "$PURCHASE_OUTPUT" | extract_field "purchase_id")"
 [[ -n "$PURCHASE_ID" ]]
 
 echo "[smoke] 5/12 verify seat moved to PURCHASED in persisted state"
-rg -q '"12C": "PURCHASED"' "$STATE_FILE"
+contains_file '"12C": "PURCHASED"' "$STATE_FILE"
 
 echo "[smoke] 6/12 cancel purchase"
 python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" cancel "$PURCHASE_ID"
 
 echo "[smoke] 7/12 verify seat returned to AVAILABLE in persisted state"
-rg -q '"12C": "AVAILABLE"' "$STATE_FILE"
+contains_file '"12C": "AVAILABLE"' "$STATE_FILE"
 
 echo "[smoke] 8/12 admin-list-flights (seeded data)"
 python3 "$ROOT_DIR/airline.py" --state-file "$STATE_FILE" admin-list-flights
