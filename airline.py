@@ -137,6 +137,20 @@ def seat_sort_key(seat: str) -> Tuple[int, str]:
     return (int(num), letter)
 
 
+def infer_rows_from_seat_map(seat_map: Dict[str, SeatStatus], default_rows: int = 24) -> int:
+    max_row = 0
+    for seat in seat_map.keys():
+        digits = ""
+        for ch in seat:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if digits:
+            max_row = max(max_row, int(digits))
+    return max_row if max_row > 0 else default_rows
+
+
 def format_seat_grid(seat_map: Dict[str, SeatStatus], rows: int = 24) -> str:
     # Simple ASCII grid: A B C  D E F with aisle gap
     out: List[str] = []
@@ -190,6 +204,58 @@ class AirlineService:
         if flight_id not in self.store.flights:
             raise ValueError(f"Unknown flight_id: {flight_id}")
         return self.store.flights[flight_id]
+
+    def list_flights(self) -> List[Flight]:
+        flights = list(self.store.flights.values())
+        flights.sort(key=lambda x: x.departure_time)
+        return flights
+
+    def add_flight(
+        self,
+        departure_city: str,
+        arrival_city: str,
+        departure_airport: str,
+        arrival_airport: str,
+        departure_dt: datetime,
+        arrival_dt: datetime,
+        rows: int = 24,
+        flight_id: Optional[str] = None,
+    ) -> Flight:
+        if rows <= 0:
+            raise ValueError("--rows must be > 0.")
+        if departure_dt >= arrival_dt:
+            raise ValueError("departure time must be before arrival time.")
+
+        dep_airport_norm = departure_airport.strip().upper()
+        arr_airport_norm = arrival_airport.strip().upper()
+
+        if len(dep_airport_norm) != 3 or not dep_airport_norm.isalpha():
+            raise ValueError("departure airport must be a 3-letter IATA code (e.g. SFO).")
+        if len(arr_airport_norm) != 3 or not arr_airport_norm.isalpha():
+            raise ValueError("arrival airport must be a 3-letter IATA code (e.g. PDX).")
+
+        generated_id = (
+            f"F-{dep_airport_norm}-{arr_airport_norm}-"
+            f"{departure_dt.strftime('%Y%m%d-%H%M')}"
+        )
+        final_flight_id = flight_id.strip() if flight_id else generated_id
+
+        if final_flight_id in self.store.flights:
+            raise ValueError(f"flight_id already exists: {final_flight_id}")
+
+        flight = Flight(
+            id=final_flight_id,
+            departure_city=departure_city.strip(),
+            arrival_city=arrival_city.strip(),
+            departure_airport=dep_airport_norm,
+            arrival_airport=arr_airport_norm,
+            departure_time=departure_dt.strftime("%Y%m%d %H:%M:%S"),
+            arrival_time=arrival_dt.strftime("%Y%m%d %H:%M:%S"),
+            departure_date=departure_dt.strftime("%Y-%m-%d"),
+            seat_map=build_seat_map(rows=rows, seats_per_row=6),
+        )
+        self.store.flights[flight.id] = flight
+        return flight
 
     # --- Operations requested ---
 
@@ -394,8 +460,9 @@ def cmd_search(args: argparse.Namespace, svc: AirlineService) -> int:
 
 def cmd_seats(args: argparse.Namespace, svc: AirlineService) -> int:
     seat_map = svc.view_available_seats(args.flight_id)
+    rows = infer_rows_from_seat_map(seat_map)
     print(f"Flight: {args.flight_id}")
-    print(format_seat_grid(seat_map, rows=24))
+    print(format_seat_grid(seat_map, rows=rows))
     return 0
 
 
@@ -454,6 +521,49 @@ def cmd_debug(args: argparse.Namespace, svc: AirlineService) -> int:
     return 0
 
 
+def _parse_admin_datetime(raw: str, field_name: str) -> datetime:
+    candidate = raw.strip()
+    formats = ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M")
+    for fmt in formats:
+        try:
+            parsed = datetime.strptime(candidate, fmt)
+            return parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(
+        f"Invalid {field_name}. Use 'YYYY-MM-DDTHH:MM' (or 'YYYY-MM-DD HH:MM')."
+    )
+
+
+def cmd_admin_add_flight(args: argparse.Namespace, svc: AirlineService) -> int:
+    dep_dt = _parse_admin_datetime(args.departure_datetime, "departure datetime")
+    arr_dt = _parse_admin_datetime(args.arrival_datetime, "arrival datetime")
+
+    flight = svc.add_flight(
+        departure_city=args.departure_city,
+        arrival_city=args.arrival_city,
+        departure_airport=args.departure_airport,
+        arrival_airport=args.arrival_airport,
+        departure_dt=dep_dt,
+        arrival_dt=arr_dt,
+        rows=args.rows,
+        flight_id=args.flight_id,
+    )
+    print("FLIGHT ADDED")
+    print(f"flight_id={flight.id}")
+    print(f"route={flight.departure_airport}->{flight.arrival_airport}")
+    print(f"depart={flight.departure_time}")
+    print(f"arrive={flight.arrival_time}")
+    print(f"rows={infer_rows_from_seat_map(flight.seat_map)}")
+    return 0
+
+
+def cmd_admin_list_flights(args: argparse.Namespace, svc: AirlineService) -> int:
+    flights = svc.list_flights()
+    print_flights(flights)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="airline", description="Airline reservation CLI (starter)")
     parser.add_argument(
@@ -493,6 +603,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_debug = sub.add_parser("debug", help="Print holds/purchases (dev helper)")
     p_debug.set_defaults(func=cmd_debug)
+
+    p_admin_add = sub.add_parser("admin-add-flight", help="Admin: add a flight")
+    p_admin_add.add_argument("--departure-city", required=True)
+    p_admin_add.add_argument("--arrival-city", required=True)
+    p_admin_add.add_argument("--departure-airport", required=True, help="3-letter IATA code, e.g. SFO")
+    p_admin_add.add_argument("--arrival-airport", required=True, help="3-letter IATA code, e.g. PDX")
+    p_admin_add.add_argument(
+        "--departure-datetime",
+        required=True,
+        help="UTC datetime: YYYY-MM-DDTHH:MM",
+    )
+    p_admin_add.add_argument(
+        "--arrival-datetime",
+        required=True,
+        help="UTC datetime: YYYY-MM-DDTHH:MM",
+    )
+    p_admin_add.add_argument("--rows", type=int, default=24, help="Number of seat rows (A-F layout)")
+    p_admin_add.add_argument("--flight-id", default=None, help="Optional explicit flight_id")
+    p_admin_add.set_defaults(func=cmd_admin_add_flight)
+
+    p_admin_list = sub.add_parser("admin-list-flights", help="Admin: list all flights")
+    p_admin_list.set_defaults(func=cmd_admin_list_flights)
 
     return parser
 

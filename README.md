@@ -9,6 +9,8 @@ It supports:
 - Temporarily holding (reserving) seats for a customer
 - Purchasing held seats (payment stubbed)
 - Cancelling purchased seats
+- Admin controls to add flights from the CLI
+- Admin controls to list all configured flights
 - Persistent state across runs (no double booking)
 
 The plane layout is fixed at **24 rows × 6 seats (A–F)**.
@@ -141,6 +143,31 @@ python airline.py cancel <PURCHASE_ID>
 python airline.py debug
 ```
 
+### 🧑‍💼 Admin: Add Flights
+
+Add a flight (times are UTC):
+
+```bash
+python airline.py admin-add-flight \
+  --departure-city "Seattle" \
+  --arrival-city "Los Angeles" \
+  --departure-airport SEA \
+  --arrival-airport LAX \
+  --departure-datetime 2025-03-02T14:30 \
+  --arrival-datetime 2025-03-02T17:10
+```
+
+Optional flags:
+
+- `--rows` to change seat rows (still A–F seats per row)
+- `--flight-id` to provide a custom flight ID instead of auto-generated ID
+
+### 🧑‍💼 Admin: List Flights
+
+```bash
+python airline.py admin-list-flights
+```
+
 ---
 
 ## 💾 State Persistence
@@ -176,7 +203,7 @@ python airline.py seats F-SFO-PDX-20250301-0845
 ### Components
 
 - **CLI (argparse)**: parses commands and flags
-- **AirlineService**: business logic (search/hold/purchase/cancel + TTL sweep)
+- **AirlineService**: business logic (search/hold/purchase/cancel/admin + TTL sweep)
 - **InMemoryStore**: in-memory data layer for flights/holds/purchases
 - **JSON persistence**: saves/loads state across runs
 
