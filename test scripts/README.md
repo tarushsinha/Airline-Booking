@@ -10,6 +10,13 @@ Run:
 bash "test scripts/smoke.sh"
 ```
 
+Run one test only:
+
+```bash
+bash "test scripts/smoke.sh" -test -1
+bash "test scripts/smoke.sh" -test 12
+```
+
 ### What It Verifies
 
 The script runs these checks in sequence:
@@ -33,6 +40,7 @@ The script runs these checks in sequence:
 - Does not touch your main `airline_state.json`.
 - Uses `set -euo pipefail` so any failing command stops the run immediately.
 - Prints step markers (`[smoke] N/12 ...`) so failures are easy to locate.
+- Prints state snapshots (seat map + hold/purchase debug view) after hold/purchase/cancel steps.
 - Retains the test state file after the run so results can be inspected.
 - Resets the test state before each run by default (`RESET_STATE=1`) for consistent test outcomes.
 
@@ -48,4 +56,10 @@ Run without resetting existing test state first:
 
 ```bash
 RESET_STATE=0 bash "test scripts/smoke.sh"
+```
+
+Disable state snapshot printing:
+
+```bash
+PRINT_STATE=0 bash "test scripts/smoke.sh"
 ```
